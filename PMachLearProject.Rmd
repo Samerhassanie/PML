@@ -1,0 +1,131 @@
+---
+title: "Practical Machine Learning and The Weight Lifting Exercise"
+author: "Samer Hassanie"
+date: "24 Apr 2015"
+output: html_document
+---
+#Synopsis
+This report aims at predicting the quality of a certain weight lifting exercise. The report uses data collected from sensors located on four different locations (belt, arm, dubbell, and glove). The raw data from the dataset was used in order to build two models, one using random forests and the second using generalized boosted regression modeling (gbm). Both models predict the quality of the exercise with good accuracy. Twenty percent of the training data was used to cross validate the model and estimate the out of sample error, which was calculated to be  0.52% for the random forest model.
+
+#Loading Relevant Packages and Downloading the data
+The following packages are assumed to be already installed and are loaded in what follows.
+```{r,warning=FALSE,results='hide',message=FALSE}
+library(dplyr);library(caret);library(ggplot2);library(doParallel)
+library(stats);library(gbm);library(knitr)
+```
+
+The data is downloaded as follows and the datasets are stored in **traindata** and **testdata**. 
+```{r, cache=TRUE}
+urltrain<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+if (!file.exists("pml-training.csv")) {
+    download.file(urltrain,"pml-training.csv",method="curl",quiet=TRUE)
+}
+
+urltest<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if (!file.exists("pml-testing.csv")) {
+    download.file(urltest,"pml-testing.csv",method="curl",quiet=TRUE)
+}
+
+traindata<-read.csv("pml-training.csv",header=TRUE)
+testdata<-read.csv("pml-testing.csv",header=TRUE)
+rm(urltrain,urltest)
+```  
+
+#Exploratory Data Analysis
+First it is good to get an idea about the dataset.
+```{r}
+str(traindata)
+```
+As it can be seen there are **`r dim(traindata)[2]`** variables and **`r dim(traindata)[1]`** observations. Furthermore, it is important to see what are the differences in variables between the **traindata** and **testdata**.
+```{r}
+setdiff(names(traindata),names(testdata))
+setdiff(names(testdata),names(traindata))
+```
+The difference as seen above, is in *classe*, which signifies the quality of the exercise, and is our **outcome**. The **testdata** dataset has *problem_id* instead to signify which programming question does the observation belong to.  
+The data below shows us how many of the observations were classified under the five classificaton levels (A = exactly according to the specification, B = throwing
+the elbows to the front, C =  lifting the dumbbell
+only halfway, D = lowering the dumbbell only halfway, E = throwing the hips to the front).
+```{r}
+summary(traindata$classe)
+```
+
+#Cleaning the Data
+To build up the model, sensor raw-data will be included as predictors, and variables like the username and the number of window will be neglected because they will lead to overfitting and model bias, which will lead to higher out of sample error.
+```{r}
+##Variables containing "gyro", "mag", "acc", "yaw", "pitch", and "roll" at the begining ##of a variable name are sensor data and therefor will be selected
+raw<-names(traindata)[grepl("^gyro|^mag|^acc|^yaw|^pitch|^croll|^cla",names(traindata))]
+rtraindata<-select(traindata,one_of(raw))
+
+##Detecting and missing values in the selected variables 
+any(is.na(rtraindata))
+
+##Checking against near zero variance variables
+any(nzv(rtraindata,saveMetrics=TRUE)[,4]==TRUE)
+```
+As shown above, there are no missing values in the selected variables and all variables have a non-zero variance and have a relevant level of importance.
+
+#Model Building
+First and for the purpose of cross validating the models, the **rtraindata** will be divided further into two datasets: **rtraindata.train** and **rtraindata.test**. This is also done for the purpose of estimating the out of sample error of the models.
+```{r}
+set.seed(23232)
+## 80% of the data is stored as training data and 20% as test data
+cvtrain<-createDataPartition(rtraindata$classe,p=0.8,list=FALSE)
+rtraindata.train<-rtraindata[cvtrain,]
+rtraindata.test<-rtraindata[-cvtrain,]
+```
+
+##Random Forests
+The random forest model is constructed from the dataset **rtraindata.train. No preprocessing is applied. The following code allows for parallel processing to speed things up.
+```{r,cache=TRUE,warning=FALSE}
+## Set up parallel processing
+cluster<-makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+    
+    set.seed(23232)
+    fitControl<-trainControl(method = "cv",number=4,allowParallel=TRUE)
+    tgrid<-expand.grid(mtry=c(6)) 
+    system.time(model_rf<-train(classe ~ ., data = rtraindata.train, method = "rf", 
+                         trControl = fitControl, tuneGrid=tgrid))
+    
+## turn off parallel processing
+stopCluster(cluster)
+```
+
+##Generalized Boosted Regression Model
+As the random forest model, the bgm model is constructed using the dataset **rtraindata.train. No preprocessing is applied and no tuning parameters are changed from their default values.
+```{r,cache=TRUE,warning=FALSE}
+## Set up parallel processing
+cluster<-makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+    set.seed(23232)
+    system.time(model_gbm<-train(classe ~ ., data = rtraindata.train, method = "gbm",
+                                 verbose=FALSE)) 
+
+## turn off parallel processing
+stopCluster(cluster)
+```
+
+##Cross Validating the models
+As it can be seen from the table below the accuracy for the *random forests* model (99.60%) is higher than that for the *gbm* model (94.93%). Hence the random forests model will be selected. And this model estimates the out of sample error to be 0.52%.
+```{r,warning=FALSE,message=FALSE}
+kable(cbind(Model=c("gbm","rf"),rbind(confusionMatrix(rtraindata.test$classe,
+                      predict(model_gbm,rtraindata.test))$overall,
+      confusionMatrix(rtraindata.test$classe,
+                      predict(model_rf,rtraindata.test))$overall)),format="pandoc")
+```
+
+#Testing
+The model is used in order to predict the outcome from the **testdata** dataset, which will be sumbitted online. And the results are as follows:
+```{r}
+predict(model_rf,testdata)
+```  
+
+#Conclusion
+The weight lifting dataset was used in order to make perdiction about the quality of the performed excercise. It was shown that using random forrests not only do we get more accurate results but also faster compared to generalized boosted regression models for this type of data.
+
+
+*For more information about the dataset, check the following:*
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf). Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
